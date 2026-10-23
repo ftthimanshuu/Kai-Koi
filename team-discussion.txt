@@ -1,0 +1,326 @@
+================================================================================
+                     KAI KOI — TEAM DISCUSSION AGENDA
+                     Date: 25 October 2026 | Before We Write Code
+================================================================================
+
+Team:
+  - Dev 1 (You)        → Backend (Booking & Payments Domain)
+  - Dev 2 (Friend)     → Backend (Venue & Session Domain)
+  - Dev 3 (Friend)     → Frontend (React + TypeScript)
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 1: DATABASE SCHEMA (ERD)
+--------------------------------------------------------------------------------
+[ ] Agree on every table, its columns, data types, and relationships.
+    This is the most critical step. Do not skip or rush this.
+
+Key entities to finalize:
+  - User             → id, firebase_uid, email, name, role (CUSTOMER/ADMIN)
+  - Venue            → id, name, type (RESTAURANT/MOVIE/SHOW), address
+  - Layout           → id, venue_id, version, description
+  - Section          → id, layout_id, name, type, capacity
+  - Seat / Table     → id, section_id, label, row, number, capacity (for tables)
+  - Session          → id, venue_id, layout_id, title, start_time, end_time, status
+  - SessionSection   → id, session_id, section_id, price (dynamic pricing per section)
+  - SeatHold         → id, seat_id, session_id, user_id, held_until (temp lock)
+  - Booking          → id, user_id, session_id, status (PENDING/CONFIRMED/CANCELLED)
+  - BookingItem      → id, booking_id, seat_id, price_at_booking
+  - Payment          → id, booking_id, razorpay_order_id, amount, status
+  - Refund           → id, payment_id, razorpay_refund_id, amount, status
+
+Questions to answer:
+  [ ] Do we version layouts? (i.e., can the layout change after sessions are created?)
+  [ ] How do restaurant tables differ from seats structurally?
+  [ ] What statuses does a Session go through? (DRAFT, PUBLISHED, ONGOING, COMPLETED)
+  [ ] What statuses does a Booking go through? (PENDING, CONFIRMED, CANCELLED)
+  [ ] Do we need a separate Ticket entity, or does BookingItem serve as the ticket?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 2: API CONTRACT (REST ENDPOINTS)
+--------------------------------------------------------------------------------
+[ ] Define all REST endpoints before anyone writes Java code.
+[ ] Frontend dev should NOT be blocked — mock APIs can be built from this spec.
+[ ] Tool recommendation: Swagger Editor or a shared openapi.yaml in the repo.
+
+Endpoint groups to define:
+  Auth:
+    - POST   /api/auth/register
+    - POST   /api/auth/login  (Firebase token exchange)
+
+  Sessions (Public):
+    - GET    /api/sessions?type=MOVIE&date=2026-10-25
+    - GET    /api/sessions/{sessionId}
+    - GET    /api/sessions/{sessionId}/seats  (current availability)
+
+  Booking:
+    - POST   /api/bookings/hold      (temp lock selected seats)
+    - POST   /api/bookings/confirm   (after payment success)
+    - GET    /api/bookings/my        (logged-in user's bookings)
+    - POST   /api/bookings/{id}/cancel
+
+  Payments:
+    - POST   /api/payments/create-order   (Razorpay order creation)
+    - POST   /api/payments/webhook        (Razorpay callback — IMPORTANT)
+
+  Admin:
+    - CRUD   /api/admin/venues
+    - CRUD   /api/admin/layouts
+    - CRUD   /api/admin/sessions
+    - GET    /api/admin/bookings
+    - POST   /api/admin/checkin/{bookingId}
+
+Questions to answer:
+  [ ] What does the seat availability response payload look like exactly?
+  [ ] Do we paginate booking history? If so, what page size?
+  [ ] What HTTP status codes and error formats do we use consistently?
+  [ ] Which endpoints require auth? Which are admin-only?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 3: WEBSOCKET EVENT SCHEMA
+--------------------------------------------------------------------------------
+[ ] This needs to be finalized BEFORE frontend starts building the seat map.
+
+Proposed STOMP Topics:
+  Subscribe:  /topic/session/{sessionId}/seats
+  Message:    { "seatId": "A12", "status": "HELD" | "AVAILABLE" | "BOOKED" }
+
+Questions to answer:
+  [ ] Do we broadcast the full seat list on connect, or just delta updates?
+  [ ] What happens if a WebSocket client disconnects mid-hold?
+  [ ] Do we need a heartbeat/ping mechanism?
+  [ ] Should admin get a separate topic with more detail (e.g., who holds which seat)?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 4: AUTHENTICATION & ROLE MATRIX
+--------------------------------------------------------------------------------
+[ ] Agree on who can do what across the entire application.
+
+Proposed Role Matrix:
+  Action                   | Guest | Customer | Admin
+  -------------------------|-------|----------|------
+  View sessions/listings   |  YES  |   YES    |  YES
+  View seat map            |  YES  |   YES    |  YES
+  Hold a seat              |  NO   |   YES    |  YES
+  Confirm a booking        |  NO   |   YES    |  YES
+  Cancel own booking       |  NO   |   YES    |  YES
+  Cancel any booking       |  NO   |   NO     |  YES
+  Create/edit sessions     |  NO   |   NO     |  YES
+  Manage layouts           |  NO   |   NO     |  YES
+  View all bookings        |  NO   |   NO     |  YES
+  Check-in customers       |  NO   |   NO     |  YES
+
+Questions to answer:
+  [ ] Where is the role stored? (Firebase custom claims vs. our own DB — recommend DB)
+  [ ] How does an admin account get created? (Manual DB insert? Super-admin flow?)
+  [ ] Do we need a STAFF role separate from ADMIN?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 5: SEAT LOCKING STRATEGY
+--------------------------------------------------------------------------------
+[ ] This is a core architectural decision for the booking engine.
+
+The Problem:
+  Two users select the same seat at the same time.
+  We need to guarantee only ONE of them gets to pay.
+
+Options:
+  A) DB-based hold   → SeatHold table with held_until timestamp + scheduled cleanup job
+  B) Redis-based TTL → Faster, auto-expiring, but adds Redis to infrastructure
+
+Questions to answer:
+  [ ] Do we use Option A (simpler, PostgreSQL only) or Option B (Redis)?
+  [ ] How long should a seat hold last? (Recommended: 10 minutes)
+  [ ] How do we clean up expired holds? (Scheduled Spring job every 1 min?)
+  [ ] Do we use DB-level SELECT FOR UPDATE (pessimistic locking) to prevent races?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 6: GIT WORKFLOW & BRANCHING STRATEGY
+--------------------------------------------------------------------------------
+[ ] Agree on this Day 1 to avoid merge conflicts and chaos.
+
+Proposed Branch Strategy:
+  main       → protected, production-ready code only
+  develop    → shared integration branch, all features merge here first
+  feature/*  → individual features (e.g., feature/booking-engine)
+  fix/*      → bug fixes
+  chore/*    → non-code changes (docs, config, migrations)
+
+Rules to agree on:
+  [ ] No direct push to main or develop — always open a Pull Request
+  [ ] Minimum 1 peer review before merging a PR
+  [ ] Commit message format: "type: short description"
+      Types: feat, fix, chore, docs, refactor, test
+  [ ] Who merges PRs? (Recommend: the reviewer merges, not the author)
+  [ ] How do we handle database migration conflicts in Flyway?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 7: PROJECT & PACKAGE STRUCTURE
+--------------------------------------------------------------------------------
+[ ] Agree on folder/package layout before anyone scaffolds code.
+
+Proposed Backend Structure (domain-driven):
+  com.kaikoi/
+    booking/         ← Dev 1 owns this
+      controller/
+      service/
+      repository/
+      model/
+      dto/
+    payment/         ← Dev 1 owns this
+    auth/            ← Dev 1 owns this
+    venue/           ← Dev 2 owns this
+    session/         ← Dev 2 owns this
+    websocket/       ← Dev 2 owns this
+    admin/           ← Dev 2 owns this
+    common/          ← BOTH contribute: shared DTOs, exceptions, utils, config
+
+Proposed Frontend Structure:
+  src/
+    pages/
+    components/
+    hooks/
+    lib/             → API client, WebSocket client, utils
+    types/           → Shared TypeScript interfaces
+
+Questions to answer:
+  [ ] Do we use Lombok in the backend? (Reduces boilerplate)
+  [ ] DTO vs Entity — do we use MapStruct for mapping?
+  [ ] Frontend: do we use React Query / TanStack Query for API state?
+  [ ] Frontend: Zustand or Context API for global state (user session, seat selection)?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 8: ERROR HANDLING STANDARD
+--------------------------------------------------------------------------------
+[ ] Agree on ONE error response format used by the entire API.
+
+Proposed Standard:
+  {
+    "status":    400,
+    "error":     "SEAT_ALREADY_HELD",
+    "message":   "Seat A12 is currently held by another user.",
+    "timestamp": "2026-10-25T10:00:00Z",
+    "path":      "/api/bookings/hold"
+  }
+
+Questions to answer:
+  [ ] What is our catalog of error codes? (Define them now, add as needed)
+  [ ] Do we use Spring's @ControllerAdvice + @ExceptionHandler globally?
+  [ ] How do we handle Razorpay webhook failures / retries?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 9: TESTING STRATEGY
+--------------------------------------------------------------------------------
+[ ] Agree on what gets tested and what "done" means for a feature.
+
+Proposed Minimum:
+  - Unit tests for all service-layer business logic (JUnit 5 + Mockito)
+  - Integration tests for the booking flow (Spring Boot Test + Testcontainers)
+  - No feature merged without at least unit tests for its service class
+  - Frontend: component tests with React Testing Library for critical flows
+
+Questions to answer:
+  [ ] Do we use Testcontainers for a real PostgreSQL in integration tests?
+  [ ] What is our minimum test coverage target? (Suggest: 70% for service layer)
+  [ ] Do we write E2E tests? (Cypress / Playwright) — or save for later?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 10: ENVIRONMENT & SECRETS MANAGEMENT
+--------------------------------------------------------------------------------
+[ ] Decide how each dev runs the project locally and how secrets are shared.
+
+Config files:
+  - application.properties    → committed (no secrets, only structure)
+  - .env.example              → committed (shows what variables are needed)
+  - .env                      → NEVER committed (in .gitignore)
+
+Secrets to manage:
+  - PostgreSQL connection URL, username, password
+  - Firebase service account JSON
+  - Razorpay Key ID and Key Secret
+  - JWT/session secret (if applicable)
+
+Questions to answer:
+  [ ] How do we share the actual .env values with each other? (WhatsApp? Notion?)
+  [ ] Do we all run PostgreSQL locally, or share one dev database?
+  [ ] Does the frontend dev need backend running locally, or do we mock APIs first?
+  [ ] Do we set up any CI (GitHub Actions) from the start?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 11: RAZORPAY INTEGRATION SPECIFICS
+--------------------------------------------------------------------------------
+[ ] Razorpay needs a few critical design decisions upfront.
+
+Payment Flow to agree on:
+  1. User confirms seats → Backend creates Razorpay Order → Returns order_id to frontend
+  2. Frontend renders Razorpay checkout modal
+  3. User pays → Razorpay calls our webhook → Backend marks booking CONFIRMED
+  4. Frontend polls or gets WebSocket event → Shows confirmation screen
+
+Questions to answer:
+  [ ] Webhook URL — how do we expose localhost for Razorpay during dev? (Use ngrok)
+  [ ] Do we verify Razorpay webhook signature? (YES — this is mandatory for security)
+  [ ] What happens if payment succeeds but our webhook fails? (Retry? Manual reconcile?)
+  [ ] Restaurant deposit: same flow, but partial amount. How do we track the balance?
+
+
+--------------------------------------------------------------------------------
+AGENDA ITEM 12: WHAT WE BUILD FIRST (PRIORITY ORDER)
+--------------------------------------------------------------------------------
+[ ] Agree on which features are MVP and which come later.
+
+Suggested MVP Priority:
+  Phase 1 — Foundation (Week 1-2):
+    [ ] DB schema + Flyway migrations
+    [ ] Project scaffold (Spring Boot + Vite setup)
+    [ ] Firebase auth integration (token filter)
+    [ ] Static venue/seat data (no admin editor yet)
+
+  Phase 2 — Core Booking (Week 3-4):
+    [ ] Session listing APIs
+    [ ] Seat availability API
+    [ ] Seat hold + WebSocket broadcast
+    [ ] Booking confirmation flow
+    [ ] Razorpay payment integration
+
+  Phase 3 — User Experience (Week 5-6):
+    [ ] My Bookings page
+    [ ] Cancellation & refund flow
+    [ ] QR code generation for check-in
+    [ ] Booking confirmation email (nice to have)
+
+  Phase 4 — Admin Panel (Week 7+):
+    [ ] Layout editor
+    [ ] Session + pricing management
+    [ ] Booking dashboard + check-in
+
+Questions to answer:
+  [ ] Does everyone agree on this order?
+  [ ] What is our overall deadline / demo date?
+  [ ] Do we demo with real Razorpay test payments or mock them?
+
+
+================================================================================
+                             ACTION ITEMS — DAY 1
+================================================================================
+
+  [ ] All three: review and finalize the ERD together (draw it out)
+  [ ] All three: agree on the API contract and write openapi.yaml
+  [ ] Dev 2: scaffold Spring Boot project structure, push to develop
+  [ ] Dev 3: scaffold Vite + React project, push to develop
+  [ ] Dev 1: set up Flyway, write first migration (users + venues tables)
+  [ ] All three: set up local environments, confirm everyone can run the project
+  [ ] All three: exchange .env values securely (NOT through git)
+
+================================================================================
+                              END OF AGENDA
+================================================================================
