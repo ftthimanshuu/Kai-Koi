@@ -8,32 +8,32 @@
 ## High-Level Architecture
 
 ```
-                          ┌─────────────────────────────┐
+                          ┌──────────────────────────────┐
                           │         BROWSER              │
                           │   React + TypeScript (Vite)  │
                           │   Tailwind CSS + shadcn/ui   │
                           └──────────┬──────────┬────────┘
                                      │ REST     │ WebSocket
                                      │ (HTTP)   │ (STOMP)
-                          ┌──────────▼──────────▼────────┐
+                          ┌──────────▼──────────▼─────────┐
                           │        BACKEND                │
                           │   Java 17 + Spring Boot       │
                           │   REST Controllers            │
                           │   WebSocket / STOMP Broker    │
                           │   Booking Engine              │
                           │   Payment Service             │
-                          └──────────┬──────────┬────────┘
+                          └──────────┬──────────┬─────────┘
                                      │          │
                    ┌─────────────────▼──┐   ┌───▼──────────────┐
-                   │     PostgreSQL      │   │   Firebase Auth   │
-                   │   (Primary DB)      │   │  (Token Verify)   │
-                   │   Flyway Migrations │   └──────────────────┘
+                   │     PostgreSQL     │   │   Firebase Auth  │
+                   │   (Primary DB)     │   │  (Token Verify)  │
+                   │   Flyway Migrations│   └──────────────────┘
                    └────────────────────┘
                                      │
                           ┌──────────▼──────────┐
-                          │      Razorpay        │
-                          │  (Payment Gateway)   │
-                          │   Test Mode (INR)    │
+                          │      Razorpay       │
+                          │  (Payment Gateway)  │
+                          │   Test Mode (INR)   │
                           └─────────────────────┘
 ```
 
