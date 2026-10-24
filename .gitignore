@@ -4,6 +4,7 @@
 
 # ── Documents / Specs ─────────────────────────
 *.pdf
+!docs/*.pdf
 
 # ── Dependencies ──────────────────────────────
 node_modules/
