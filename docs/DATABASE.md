@@ -1,7 +1,7 @@
 # 📊 Kai Koi — Proposed Database Schema (ERD)
 
-> ⚠️ STATUS: PROPOSED DRAFT — Review and finalize with team before writing any code.
-> Last updated: 24 October 2026
+> ✅ STATUS: UPDATED — Core stack & seat-hold strategy finalized (Redis + PostgreSQL).
+> Last updated: 25 October 2026
 
 ---
 
@@ -180,24 +180,26 @@ Maps a section to a session and sets the price for that section in that session 
 
 ---
 
-### 8. `seat_holds`
-Temporary lock on a seat during checkout. Prevents double-booking while user pays.
+### 8. `seat_holds` (Redis In-Memory Key-Value Storage)
+Temporary distributed lock on a seat during checkout. Prevents double-booking while the user completes payment.
 
-| Column        | Type         | Constraints                      | Notes                              |
-|---------------|--------------|----------------------------------|------------------------------------|
-| `id`          | UUID         | PRIMARY KEY                      |                                    |
-| `seat_id`     | UUID         | NOT NULL, FK → seats.id          |                                    |
-| `session_id`  | UUID         | NOT NULL, FK → sessions.id       |                                    |
-| `user_id`     | UUID         | NOT NULL, FK → users.id          |                                    |
-| `held_until`  | TIMESTAMPTZ  | NOT NULL                         | Expiry timestamp (now + 10 mins)   |
-| `created_at`  | TIMESTAMPTZ  | NOT NULL                         |                                    |
+> **Decision Locked:** Stored in **Redis** with TTL, NOT as a persistent PostgreSQL table.
+> - **Zero DB Churn:** 90%+ of holds either convert or abandon. Storing in Redis eliminates dead row bloat and VACUUM pressure in PostgreSQL.
+> - **Atomic Operations:** Uses `SET seat_hold:{sessionId}:{seatId} {userId} NX EX 600`. The `NX` (Not eXists) flag guarantees atomic single-user locking without table lock contention.
+> - **Auto-Expiry & WebSockets:** When the 10-minute TTL expires, Redis Keyspace Notifications (`notify-keyspace-events=Ex`) notify the Spring Boot backend, which immediately broadcasts a WebSocket `AVAILABLE` update to all clients viewing that session.
 
-**Unique constraint:** `(seat_id, session_id)` — only one active hold per seat per session
+| Attribute        | Specification                    | Notes                                             |
+|------------------|----------------------------------|---------------------------------------------------|
+| **Storage**      | Redis In-Memory Key-Value        | Key auto-expires after TTL                        |
+| **Key Pattern**  | `seat_hold:{sessionId}:{seatId}` | Combines session and seat for unique hold scoping |
+| **Value**        | `{userId}`                       | UUID of the user who holds the lock               |
+| **TTL**          | 600 seconds (10 minutes)         | Configurable via `booking.hold.duration.minutes`  |
+| **Lock Command** | `SET key val NX EX 600`          | Fails immediately if already held                 |
 
-**Open Questions:**
-- [ ] Hold duration: 10 minutes? Should it be configurable per venue?
-- [ ] Cleanup: scheduled Spring job runs every 60 seconds to delete expired holds?
-- [ ] Or use PostgreSQL-level TTL via pg_cron? (Simpler but adds extension dependency)
+**Lifecycle:**
+1. **Acquire:** When user proceeds to checkout, Spring executes `SET seat_hold:{sessionId}:{seatId} {userId} NX EX 600`. If all seats succeed, hold is granted.
+2. **Success:** Upon payment confirmation, Spring writes the confirmed `bookings` & `booking_items` to PostgreSQL and deletes the Redis key.
+3. **Expiry / Abandon:** If TTL expires, Redis drops the key and publishes an expired event; Spring listener broadcasts `AVAILABLE` on WebSocket.
 
 ---
 
@@ -319,12 +321,12 @@ venues          (1) ──── (∞) sessions
 layouts         (1) ──── (∞) sections
 sections        (1) ──── (∞) seats
 sessions        (1) ──── (∞) session_sections
-sessions        (1) ──── (∞) seat_holds
+sessions        (1) ──── (∞) seat_holds (in Redis, TTL 10m)
 sessions        (1) ──── (∞) bookings
 bookings        (1) ──── (∞) booking_items
 bookings        (1) ──── (1) payments
 payments        (1) ──── (∞) refunds
-seats           (1) ──── (∞) seat_holds
+seats           (1) ──── (∞) seat_holds (in Redis, TTL 10m)
 seats           (1) ──── (∞) booking_items
 ```
 

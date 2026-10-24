@@ -1,7 +1,7 @@
 # ⚡ Kai Koi — Proposed WebSocket Event Schema
 
-> ⚠️ STATUS: PROPOSED DRAFT — Review and finalize with team before writing any code.
-> Last updated: 24 October 2026
+> ✅ STATUS: UPDATED — Core stack & real-time seat hold sync finalized (Redis + STOMP).
+> Last updated: 25 October 2026
 
 ---
 
@@ -93,13 +93,13 @@ client.activate();
 
 ## Events That Trigger a Broadcast
 
-| Action                              | Broadcast Topic                         | New Status   |
-|-------------------------------------|-----------------------------------------|--------------|
-| User selects seats → hold created   | `/topic/session/{id}/seats`             | `HELD`       |
-| Hold expires (user abandoned cart)  | `/topic/session/{id}/seats`             | `AVAILABLE`  |
-| User cancels hold manually          | `/topic/session/{id}/seats`             | `AVAILABLE`  |
-| Payment confirmed → booking created | `/topic/session/{id}/seats`             | `BOOKED`     |
-| Booking cancelled                   | `/topic/session/{id}/seats`             | `AVAILABLE`  |
+| Action                              | Trigger Mechanism                     | Broadcast Topic             | New Status   |
+|-------------------------------------|---------------------------------------|-----------------------------|--------------|
+| User selects seats → hold created   | Redis `SET ... NX EX 600` succeeds    | `/topic/session/{id}/seats` | `HELD`       |
+| Hold expires (user abandoned cart)  | Redis Keyspace Expiry notification    | `/topic/session/{id}/seats` | `AVAILABLE`  |
+| User cancels hold manually          | Redis `DEL seat_hold:...`             | `/topic/session/{id}/seats` | `AVAILABLE`  |
+| Payment confirmed → booking created | Razorpay verify/webhook → Postgres DB | `/topic/session/{id}/seats` | `BOOKED`     |
+| Booking cancelled                   | Admin / user refund → Postgres DB     | `/topic/session/{id}/seats` | `AVAILABLE`  |
 
 ---
 
@@ -139,8 +139,10 @@ If the WebSocket connection drops:
   - Or can we rely on the POST /bookings/confirm REST response?
   - **Recommendation:** Use REST response for confirmation, WebSocket only for seat map updates
 
-- [ ] What happens to held seats shown to User A when User B's hold expires?
-  - The expiry cleanup job fires → backend broadcasts `AVAILABLE` on the topic → User A's map auto-updates
+- [x] **What happens to held seats shown to User A when User B's hold expires?**
+  - **Decision Locked:** Powered by **Redis Keyspace Notifications** (`notify-keyspace-events=Ex`).
+  - When Redis expires `seat_hold:{sessionId}:{seatId}` after 10 minutes, Spring's `KeyExpirationEventMessageListener` catches the event, parses `{sessionId}` and `{seatId}`, and immediately pushes `AVAILABLE` to `/topic/session/{sessionId}/seats`.
+  - Zero periodic DB polling or cron overhead; all connected clients update within milliseconds.
 
 - [ ] Do admin users need a separate topic with extra info (e.g., which user holds which seat)?
   - `/topic/admin/session/{id}/seats` with `heldByUserId` in the payload?

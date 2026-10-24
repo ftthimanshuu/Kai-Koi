@@ -1,7 +1,7 @@
 # 🏗️ Kai Koi — System Architecture Overview
 
-> ⚠️ STATUS: PROPOSED DRAFT — Review and finalize with team before writing any code.
-> Last updated: 24 October 2026
+> ✅ DECISIONS LOCKED — Core stack finalized. Update only after team discussion.
+> Last updated: 25 October 2026
 
 ---
 
@@ -22,19 +22,19 @@
                           │   WebSocket / STOMP Broker    │
                           │   Booking Engine              │
                           │   Payment Service             │
-                          └──────────┬──────────┬─────────┘
-                                     │          │
-                   ┌─────────────────▼──┐   ┌───▼──────────────┐
-                   │     PostgreSQL     │   │   Firebase Auth  │
-                   │   (Primary DB)     │   │  (Token Verify)  │
-                   │   Flyway Migrations│   └──────────────────┘
-                   └────────────────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │      Razorpay       │
-                          │  (Payment Gateway)  │
-                          │   Test Mode (INR)   │
-                          └─────────────────────┘
+                          └────┬───────────┬─────────┬────┘
+                               │           │         │
+             ┌─────────────────▼──┐  ┌─────▼─────┐ ┌─▼────────────────┐
+             │     PostgreSQL     │  │   Redis   │ │  Firebase Auth   │
+             │   (Primary DB)     │  │(Seat Hold │ │  (Token Verify)  │
+             │ Flyway Migrations  │  │ & Expiry) │ └──────────────────┘
+             └────────────────────┘  └───────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │      Razorpay       │
+                    │  (Payment Gateway)  │
+                    │   Test Mode (INR)   │
+                    └─────────────────────┘
 ```
 
 ---
@@ -49,12 +49,19 @@
 - **Auth:** Firebase SDK for login, passes ID token to backend via `Authorization` header
 
 ### Backend (Dev 1 + Dev 2)
-- **Framework:** Java 17 + Spring Boot 3.x
-- **API:** REST controllers + Spring WebSocket (STOMP)
+- **Framework:** Java 17 + Spring Boot 3.x _(chosen intentionally to learn Spring Boot)_
+- **API:** REST controllers + Spring WebSocket (STOMP) _(chosen intentionally to learn WebSocket/STOMP)_
 - **Auth:** Spring Security filter that verifies Firebase ID tokens
 - **DB Access:** Spring Data JPA + Hibernate
 - **Migrations:** Flyway (versioned SQL migration files)
 - **Payments:** Razorpay Java SDK + webhook handler
+
+### Redis
+- **Purpose:** Seat hold storage with automatic TTL expiry
+- **Client:** Spring Data Redis (Lettuce)
+- **Key pattern:** `seat_hold:{sessionId}:{seatId}` → value: `userId`, TTL: 10 minutes
+- **Why Redis over DB table:** Keys auto-expire — no scheduled cleanup job needed. When a TTL fires, a Redis keyspace notification can trigger the WebSocket broadcast to release the seat.
+- **Keyspace notifications:** Enable `notify-keyspace-events=Ex` on Redis server to listen for key expiry events in Spring
 
 ### Database
 - **Engine:** PostgreSQL 15+
@@ -115,17 +122,18 @@ com.kaikoi/
 
 ## Technology Decisions (Proposed)
 
-| Decision | Choice | Reason |
-|---|---|---|
-| Frontend build tool | Vite | Fast dev server, native TypeScript support |
-| UI Components | shadcn/ui | Accessible, composable, Tailwind-native |
-| Backend framework | Spring Boot 3.x | Java standard, strong WebSocket support |
-| ORM | Spring Data JPA | Standard with Spring, works well with PostgreSQL |
-| DB migrations | Flyway | SQL-first, version-controlled, team-safe |
-| Auth | Firebase Auth | Handles Google OAuth and email/password out of the box |
-| Payments | Razorpay | Indian payment gateway, good test mode |
-| Real-time | STOMP over WebSocket | Built into Spring, works well with React STOMP clients |
-| Primary keys | UUID | Avoids sequential ID guessing, safe to expose in URLs |
+| Decision | Choice | Status | Reason |
+|---|---|---|---|
+| Frontend build tool | Vite | ✅ Final | Fast dev server, native TypeScript support |
+| UI Components | shadcn/ui | ✅ Final | Accessible, composable, Tailwind-native |
+| Backend framework | Spring Boot 3.x | ✅ Final | Intentional — learning Spring Boot on a real project |
+| ORM | Spring Data JPA | ✅ Final | Standard with Spring, works well with PostgreSQL |
+| DB migrations | Flyway | ✅ Final | SQL-first, version-controlled, team-safe |
+| Auth | Firebase Auth | ✅ Final | Handles Google OAuth and email/password out of the box |
+| Payments | Razorpay | ✅ Final | Indian payment gateway, good test mode |
+| Real-time | STOMP over WebSocket | ✅ Final | Intentional — learning WebSocket/STOMP on a real project |
+| Seat holds | Redis (TTL keys) | ✅ Final | Auto-expiry, no cleanup job, keyspace notifications for WS |
+| Primary keys | UUID | ✅ Final | Avoids sequential ID guessing, safe to expose in URLs |
 
 ---
 
@@ -144,6 +152,11 @@ spring.datasource.password=${DATABASE_PASSWORD}
 # Flyway
 spring.flyway.enabled=true
 spring.flyway.locations=classpath:db/migration
+
+# Redis
+spring.data.redis.host=${REDIS_HOST:localhost}
+spring.data.redis.port=${REDIS_PORT:6379}
+spring.data.redis.password=${REDIS_PASSWORD:}
 
 # Firebase
 firebase.credentials.path=${FIREBASE_CREDENTIALS_PATH}
@@ -171,10 +184,10 @@ VITE_RAZORPAY_KEY_ID=rzp_test_...
 
 ## Open Questions for Team Discussion
 
-- [ ] Do we use Docker Compose to run PostgreSQL locally, or does each dev install it natively?
-- [ ] Do we need Redis for seat holds, or is a PostgreSQL-based hold table sufficient for v1?
+- [ ] Do we use Docker Compose to spin up PostgreSQL + Redis locally for all devs? (Recommended)
 - [ ] Do we set up a staging environment, or just local + production?
-- [ ] What is our strategy for exposing the Razorpay webhook URL during local development? (ngrok?)
+- [ ] What is our strategy for exposing the Razorpay webhook URL during local development? (ngrok)
 - [ ] Do we add CORS configuration from Day 1? (Yes — frontend runs on port 5173, backend on 8080)
-- [ ] Do we use Lombok in the backend to reduce boilerplate?
+- [ ] Do we use Lombok in the backend to reduce boilerplate? (Recommended: Yes)
 - [ ] Do we use MapStruct for entity ↔ DTO mapping, or write mappers manually?
+- [ ] Enable Redis keyspace notifications (`notify-keyspace-events=Ex`) to auto-broadcast seat release on TTL expiry?

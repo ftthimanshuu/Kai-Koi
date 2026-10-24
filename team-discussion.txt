@@ -131,11 +131,13 @@ Options:
   A) DB-based hold   → SeatHold table with held_until timestamp + scheduled cleanup job
   B) Redis-based TTL → Faster, auto-expiring, but adds Redis to infrastructure
 
-Questions to answer:
-  [ ] Do we use Option A (simpler, PostgreSQL only) or Option B (Redis)?
-  [ ] How long should a seat hold last? (Recommended: 10 minutes)
-  [ ] How do we clean up expired holds? (Scheduled Spring job every 1 min?)
-  [ ] Do we use DB-level SELECT FOR UPDATE (pessimistic locking) to prevent races?
+DECISION LOCKED: Option B (Redis-based TTL)
+  [x] Redis Key: `seat_hold:{sessionId}:{seatId}` → value: `{userId}`
+  [x] Hold duration: 10 minutes (600 seconds)
+  [x] Atomic acquisition: `SET ... NX EX 600` (guarantees atomic locking; fails if held)
+  [x] Auto-cleanup & real-time release: Redis keyspace notifications (`notify-keyspace-events=Ex`)
+      trigger Spring Boot listener to immediately broadcast `AVAILABLE` to all WebSocket clients.
+  [x] Local setup: Handled via Docker Compose (PostgreSQL 15 + Redis 7), so zero manual install.
 
 
 --------------------------------------------------------------------------------
